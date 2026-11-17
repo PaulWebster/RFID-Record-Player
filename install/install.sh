@@ -41,6 +41,14 @@ fi
 
 echo "Installing systemd service for record player"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WEB_PORT=""
+if [[ -r "$SCRIPT_DIR/web_port.conf" ]]; then
+    WEB_PORT="$(tr -d '[:space:]' < "$SCRIPT_DIR/web_port.conf")"
+fi
+if ! [[ "$WEB_PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$WEB_PORT < 1 || 10#$WEB_PORT > 65535)); then
+    echo "Warning: Invalid or unreadable web_port.conf; using port 8080." >&2
+    WEB_PORT=8080
+fi
 cat > /tmp/record-player.service <<EOF
 [Unit]
 Description=RFID Record Player
@@ -78,7 +86,7 @@ else
     echo "Firewall setup skipped. You can configure it anytime via 'bash install/configure_firewall.sh strict' or the setup TUI."
 fi
 echo ""
-echo "Web interface will be available at:  http://record-player.local:8082"
+echo "Web interface will be available at:  http://$(hostname).local:$WEB_PORT"
 
 read -p "Would you like to restart your Raspberry Pi now? [Y/N] " userInput
 userInput="${userInput^^}"

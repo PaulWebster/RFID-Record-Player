@@ -88,7 +88,7 @@
     <span id="vinyl-icon" style="font-size:24px;">💿</span>
     <div>
       <div style="font-size:17px;font-weight:700;color:#fff;">RFID Record Player</div>
-      <div style="font-size:11px;color:#555;">Raspberry Pi · Management UI · :8080</div>
+      <div style="font-size:11px;color:#555;">Raspberry Pi · Management UI</div>
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:7px;">
       <div id="status-dot" style="width:8px;height:8px;border-radius:50%;background:#444;transition:background .3s;"></div>
@@ -202,7 +202,7 @@
 
     <!-- Tag list -->
     <div class="card">
-      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">Mapped Tags</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px;">RFID Tags</div>
       <div id="rfid-list"><p style="color:#444;font-size:12px;text-align:center;padding:10px 0;">Loading…</p></div>
     </div>
 
@@ -401,6 +401,7 @@ let allMediaFiles = [];
 let selectedFilePath = null;   // from file picker modal
 let quickAssignPath = null;    // from quick-assign panel
 let pickerSelectedPath = null;
+let lastActivityEventId = 0;
 
 // ─── Tab switching ────────────────────────────────────────────────────────────
 function showTab(name, el) {
@@ -449,6 +450,17 @@ function appendLog(msg) {
   el.scrollTop = el.scrollHeight;
 }
 function clearLog() { document.getElementById('log-output').innerHTML = ''; }
+
+async function pollActivity() {
+  try {
+    const r = await fetch(`/api/activity?after=${lastActivityEventId}`);
+    const d = await r.json();
+    d.events.forEach(event => {
+      appendLog(event.message);
+      lastActivityEventId = event.id;
+    });
+  } catch(e) {}
+}
 
 // ─── Status polling ───────────────────────────────────────────────────────────
 async function fetchStatus() {
@@ -612,6 +624,8 @@ async function loadPairedDevices() {
 }
 
 // ─── RFID Tags ────────────────────────────────────────────────────────────────
+let rfidEntries = {};
+
 function toggleAddType() {
   const t = document.getElementById('add-type').value;
   document.getElementById('add-spotify-fields').style.display = t === 'spotify' ? '' : 'none';
@@ -621,31 +635,63 @@ function toggleAddType() {
 async function loadRfidTags() {
   try {
     const r = await fetch('/api/rfid'); const d = await r.json();
+    rfidEntries = d;
     const el = document.getElementById('rfid-list');
     const entries = Object.entries(d);
-    if (!entries.length) { el.innerHTML = '<p style="color:#444;font-size:12px;text-align:center;padding:10px 0;">No tags mapped yet.</p>'; return; }
+    if (!entries.length) { el.innerHTML = '<p style="color:#444;font-size:12px;text-align:center;padding:10px 0;">No tags detected yet.</p>'; return; }
     el.innerHTML = entries.map(([id, entry]) => {
       const t = entry.type || 'spotify';
-      const label = entry.label || (t === 'local' ? (entry.path||'').split('/').pop() : id);
-      const target = t === 'spotify' ? (entry.uri||'') : (entry.path||'');
-      const typeTag = t === 'spotify'
-        ? `<span class="tag tag-green">Spotify</span>`
-        : `<span class="tag tag-orange">Local</span>`;
-      const icon = t === 'spotify' ? '🎵' : '🎵';
+      const isUnmapped = t === 'unmapped';
+      const label = entry.label || (isUnmapped ? 'Unmapped tag' : (t === 'local' ? (entry.path||'').split('/').pop() : id));
+      const target = isUnmapped ? 'Not mapped yet' : (t === 'spotify' ? (entry.uri||'') : (entry.path||''));
+      const typeTag = isUnmapped
+        ? `<span class="tag tag-gray">Unmapped</span>`
+        : (t === 'spotify'
+          ? `<span class="tag tag-green">Spotify</span>`
+          : `<span class="tag tag-orange">Local</span>`);
+      const mapButton = isUnmapped
+        ? `<button class="btn btn-blue btn-sm" data-rfid-id="${esc(id)}" onclick="mapRfidTag(this.dataset.rfidId)">Map</button>`
+        : '';
+      const editButton = !isUnmapped
+        ? `<button class="btn btn-muted btn-sm" data-rfid-id="${esc(id)}" onclick="editRfidTag(this.dataset.rfidId)">Edit</button>`
+        : '';
       return `
         <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #1e1e1e;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:12px;font-weight:600;">${icon} ${esc(label)}</div>
+            <div style="font-size:12px;font-weight:600;">🎵 ${esc(label)}</div>
             <div style="font-size:10px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px;">${esc(target)}</div>
             <div style="font-size:10px;color:#444;">ID: ${esc(id)}</div>
           </div>
           <div style="display:flex;gap:5px;align-items:center;flex-shrink:0;margin-left:10px;">
             ${typeTag}
+            ${mapButton}
+            ${editButton}
             <button class="btn btn-red btn-sm" onclick="deleteRfid('${esc(id)}')">✕</button>
           </div>
         </div>`;
     }).join('');
   } catch(e) { document.getElementById('rfid-list').innerHTML = '<p style="color:#c0392b;font-size:12px;">Error loading tags.</p>'; }
+}
+
+function mapRfidTag(id) {
+  const input = document.getElementById('add-rfid-id');
+  input.value = id;
+  input.focus();
+  input.scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function editRfidTag(id) {
+  const entry = rfidEntries[id];
+  if (!entry || entry.type === 'unmapped') return;
+
+  document.getElementById('add-rfid-id').value = id;
+  document.getElementById('add-label').value = entry.label || '';
+  document.getElementById('add-type').value = entry.type || 'spotify';
+  document.getElementById('add-uri').value = entry.uri || '';
+  document.getElementById('add-path').value = entry.path || '';
+  toggleAddType();
+  document.getElementById('add-rfid-id').scrollIntoView({behavior:'smooth', block:'center'});
+  document.getElementById('add-rfid-id').focus();
 }
 
 async function addRfidTag() {
@@ -664,7 +710,7 @@ async function addRfidTag() {
     const r = await fetch('/api/rfid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d = await r.json();
     if (d.success) {
-      notify('Tag saved!','success');
+      notify(`Tag added: ${rfid_id}`,'success');
       ['add-rfid-id','add-label','add-uri','add-path'].forEach(id => document.getElementById(id).value = '');
       loadRfidTags();
     } else { notify(d.error||'Failed','error'); }
@@ -675,7 +721,7 @@ async function deleteRfid(id) {
   if (!confirm(`Remove tag ${id}?`)) return;
   const r = await fetch(`/api/rfid/${encodeURIComponent(id)}`,{method:'DELETE'});
   const d = await r.json();
-  notify(d.success ? 'Tag removed' : d.error, d.success ? 'success' : 'error');
+  notify(d.success ? `Tag removed: ${id}` : d.error, d.success ? 'success' : 'error');
   loadRfidTags();
 }
 
@@ -888,8 +934,8 @@ async function loadSecurityStatus() {
       badge.className = isStrict ? 'tag tag-green' : 'tag tag-blue';
       badge.textContent = isStrict ? '● Active (Strict LAN)' : '● Active (Standard)';
       summary.innerHTML = isStrict
-        ? '<strong>Strict Mode Active:</strong> Inbound SSH (22) and Web UI (8080) are strictly limited to RFC 1918 private subnets. All external internet access is blocked.'
-        : '<strong>Standard Mode Active:</strong> Rate-limited SSH and port 8080 are open on local network.';
+        ? '<strong>Strict Mode Active:</strong> Inbound SSH (22) and Web UI access are strictly limited to RFC 1918 private subnets. All external internet access is blocked.'
+        : '<strong>Standard Mode Active:</strong> Rate-limited SSH and Web UI access are open on the local network.';
     } else {
       badge.className = 'tag tag-red';
       badge.textContent = '● Disabled';
@@ -938,6 +984,7 @@ fetchPlayback();
 loadPairedDevices();
 setInterval(fetchStatus, 3000);
 setInterval(fetchPlayback, 5000);
+setInterval(pollActivity, 1000);
 setInterval(() => { if (currentTab === 'local') fetchLocalStatus(); }, 3000);
 </script>
 </body>

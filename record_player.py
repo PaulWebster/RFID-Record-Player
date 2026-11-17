@@ -8,12 +8,15 @@ RFID map entry formats (rfid.json):
   - New object format:
       "123456": {"type": "spotify", "uri": "spotify:album:..."}
       "123456": {"type": "local",   "path": "/home/pi/Music/album.mp3"}
+      "123456": {"type": "unmapped"}
 """
 from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
+import termios
 import RPi.GPIO as GPIO
 import threading
 import time
@@ -28,6 +31,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from bluetooth_manager import BluetoothManager
 from local_media_player import LocalMediaPlayer
 import web_server
+from web_config import WEB_PORT
 
 HALL_SENSOR_PIN = 17
 STEPPER_PINS = [14, 15, 18, 23]
@@ -315,17 +319,26 @@ class RecordPlayer:
             self.motor.stop()
             self.router.pause()
 
-        if self.spinning:
-            rfid_id = self.rfid.read_id_no_block()
-            if rfid_id and rfid_id != self.current_rfid:
-                print(f"RFID changed: {rfid_id}")
-                self.current_rfid = rfid_id
-                self.router.play(rfid_id)
+        rfid_id = self.rfid.read_id_no_block()
+        if not rfid_id:
+            return
+
+        rfid_id = str(rfid_id)
+        entry = self.router.rfid_map.get(rfid_id)
+        if entry is None:
+            web_server.register_unmapped_rfid(rfid_id)
+            return
+        if isinstance(entry, dict) and entry.get("type") == "unmapped":
+            return
+
+        if self.spinning and rfid_id != self.current_rfid:
+            print(f"RFID changed: {rfid_id}")
+            self.current_rfid = rfid_id
+            self.router.play(rfid_id)
 
 
 def get_lan_ips() -> list[str]:
     """Detect LAN IP addresses for display."""
-    import socket
     ips = []
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -339,6 +352,14 @@ def get_lan_ips() -> list[str]:
 
 def main():
     print("=== Starting RFID Record Player ===")
+    terminal_fd = None
+    terminal_settings = None
+    if sys.stdin.isatty():
+        terminal_fd = sys.stdin.fileno()
+        try:
+            terminal_settings = termios.tcgetattr(terminal_fd)
+        except termios.error as e:
+            print(f"Warning: Unable to preserve terminal settings: {e}")
 
     # 1. Playback controllers (local & Spotify)
     spotify = SpotifyController()
@@ -348,7 +369,7 @@ def main():
     # 2. Bluetooth manager
     bt = BluetoothManager()
 
-    # 3. Start Web Management Server IMMEDIATELY (port 8080)
+    # 3. Start Web Management Server IMMEDIATELY
     web_server.init(
         bluetooth_manager=bt,
         spotify_controller=spotify,
@@ -356,14 +377,14 @@ def main():
         playback_router=router,
         record_player=None,
     )
-    web_server.run_server(host="0.0.0.0", port=8082)
+    web_server.run_server(host="0.0.0.0", port=WEB_PORT)
 
     lan_ips = get_lan_ips()
     print("--------------------------------------------------")
     print("✓ Web management interface is LIVE:")
-    print("  http://record-player.local:8082")
+    print(f"  http://{socket.gethostname()}.local:{WEB_PORT}")
     for ip in lan_ips:
-        print(f"  http://{ip}:8082")
+        print(f"  http://{ip}:{WEB_PORT}")
     print("--------------------------------------------------")
 
     # 4. Bluetooth auto-reconnect in background thread (non-blocking)
@@ -413,13 +434,20 @@ def main():
     except KeyboardInterrupt:
         print("Shutting down...")
     finally:
-        router.stop_all()
-        if motor:
-            motor.stop()
         try:
-            GPIO.cleanup()
-        except Exception:
-            pass
+            router.stop_all()
+            if motor:
+                motor.stop()
+            try:
+                GPIO.cleanup()
+            except Exception:
+                pass
+        finally:
+            if terminal_settings is not None:
+                try:
+                    termios.tcsetattr(terminal_fd, termios.TCSADRAIN, terminal_settings)
+                except termios.error as e:
+                    print(f"Warning: Unable to restore terminal settings: {e}")
 
 
 if __name__ == "__main__":

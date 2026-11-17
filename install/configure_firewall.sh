@@ -8,6 +8,15 @@
 set -e
 
 MODE="${1:-strict}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WEB_PORT=""
+if [[ -r "$SCRIPT_DIR/web_port.conf" ]]; then
+    WEB_PORT="$(tr -d '[:space:]' < "$SCRIPT_DIR/web_port.conf")"
+fi
+if ! [[ "$WEB_PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$WEB_PORT < 1 || 10#$WEB_PORT > 65535)); then
+    echo "Warning: Invalid or unreadable web_port.conf; using port 8080." >&2
+    WEB_PORT=8080
+fi
 
 if ! command -v ufw >/dev/null 2>&1; then
     echo "Installing UFW (Uncomplicated Firewall)..."
@@ -32,14 +41,14 @@ case "$MODE" in
         for subnet in "${SUBNETS[@]}"; do
             echo "Allowing access from $subnet..."
             sudo ufw allow from "$subnet" to any port 22 proto tcp comment "SSH from $subnet"
-            sudo ufw allow from "$subnet" to any port 8080 proto tcp comment "Web UI from $subnet"
+            sudo ufw allow from "$subnet" to any port "$WEB_PORT" proto tcp comment "Web UI from $subnet"
         done
 
         # Rate limit SSH
         sudo ufw limit 22/tcp comment 'Rate limit SSH'
 
         sudo ufw --force enable
-        echo "✓ Strict firewall active! Only devices on your local network can reach SSH and port 8080."
+        echo "✓ Strict firewall active! Only devices on your local network can reach SSH and the Web UI (port $WEB_PORT)."
         ;;
 
     standard)
@@ -56,10 +65,10 @@ case "$MODE" in
         sudo ufw limit 22/tcp comment 'Rate limit SSH'
 
         # Allow Web UI
-        sudo ufw allow 8080/tcp comment 'Record Player Web UI'
+        sudo ufw allow "$WEB_PORT/tcp" comment 'Record Player Web UI'
 
         sudo ufw --force enable
-        echo "✓ Standard firewall active! SSH is rate-limited and port 8080 is open."
+        echo "✓ Standard firewall active! SSH is rate-limited and Web UI port $WEB_PORT is open."
         ;;
 
     disable)

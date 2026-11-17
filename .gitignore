@@ -215,4 +215,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local rfid tag mappings
 rfid.json
+ISSUES.md
+# 3d model (download via Patreon to support original author)
+*.3mf
+*.stl
+# Videos (watch vie YouTube to support original author)
+*.webm

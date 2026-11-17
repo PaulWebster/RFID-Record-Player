@@ -22,6 +22,7 @@ from spotipy.cache_handler import MemoryCacheHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import firewall_manager
+from web_config import WEB_PORT
 
 ENV_FILE = ".env"
 RFID_FILE = "rfid.json"
@@ -90,7 +91,7 @@ def set_up_spotify_credentials():
     print("\n--- Spotify Credentials Setup ---")
     client_id = input("Enter Spotify Client ID: ").strip()
     client_secret = input("Enter Spotify Client Secret: ").strip()
-    redirect_uri = input("Enter Redirect URI (e.g. http://127.0.0.1:8080): ").strip()
+    redirect_uri = input(f"Enter Redirect URI (e.g. http://127.0.0.1:{WEB_PORT}): ").strip()
 
     cache_handler = MemoryCacheHandler()
     auth = SpotifyOAuth(

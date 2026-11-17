@@ -10,7 +10,7 @@ Features RFID detection of tagged records for Spotify content, a stepper motor�
 - 💿 **RFID-triggered Spotify & Local Media playback** — scan a tagged record to play Spotify URIs or local audio files (.mp3, .flac, .wav, .ogg, .m4a, etc.)
 - 📁 **Local Audio File Support** — play local files headlessly using `mpv` without requiring a Spotify subscription or internet connection
 - 🔊 **Bluetooth speaker** — pairs and connects to any A2DP Bluetooth speaker; auto-reconnects on boot
-- 🌐 **Web management UI** — accessible at `http://raspberrypi.local:8080` without a display, with drag-and-drop file upload, file browser, and tag management
+- 🌐 **Web management UI** — accessible without a display at the system hostname and port configured in `web_port.conf` (default: 8082; falls back to 8080 if the config is invalid or unreadable), with drag-and-drop file upload, file browser, and tag management
 - 🖥 **Interactive TUI setup** — command-line interface for Spotify credentials, tag scanning, local file mapping, tag inspection, and firewall hardening
 - 🛡️ **Upload Security Checks** — magic byte audio header validation, script/executable blocklist, double-extension detection, and directory traversal confinement
 - 🧱 **Firewall Hardening (UFW)** — presets for Strict LAN-only access (private subnets only) or Standard mode with rate-limited SSH
@@ -100,7 +100,7 @@ The stepper motor may become hot after long periods of use.
     - Visit [Spotify For Developers](https://developer.spotify.com/dashboard/applications) and Sign In
     - In the Developer Dashboard, click "Create an App"
         - Give your app a Name and Description
-        - For the Redirect URIs, enter `http://127.0.0.1:8080`
+        - For the Redirect URIs, enter `http://127.0.0.1:<port>` using the port in `web_port.conf` (default: `http://127.0.0.1:8082`)
         - Check `Web API` box
     - In the setup script, enter the `Client ID`, `Client Secret`, and `Redirect URI`
     - Visit the URL to authorize your app and paste the redirected URL back.
@@ -113,7 +113,7 @@ The stepper motor may become hot after long periods of use.
     - You can also add/remove tags later via the **web interface** (see below)
 6. Pair a Bluetooth speaker
     - The Pi's Bluetooth adapter is powered on automatically at startup
-    - Open the web interface at `http://raspberrypi.local:8080`
+    - Open the web interface at `http://<system-hostname>.local:<port>` using the port in `web_port.conf`
     - Go to the **Bluetooth** tab, click **Scan**, and select your speaker
     - Once paired, the speaker will auto-reconnect on every boot
 7. Start the Record Player
@@ -146,7 +146,7 @@ Options:
 
 ## Web Interface
 
-Once the record player is running, open **`http://raspberrypi.local:8080`** in any browser on the same network.
+Once the record player is running, open `http://<system-hostname>.local:<port>` in any browser on the same network. The port is configured in `web_port.conf` (default: `8082`).
 
 | Tab | What you can do |
 |-----|----------------|
@@ -170,7 +170,7 @@ Every uploaded media file undergoes strict validation before being stored on dis
 You can configure the firewall directly from the terminal or web interface:
 
 ```bash
-# Strict mode: Restricts SSH (22) and Web UI (8080) exclusively to private LAN subnets (192.168.x.x, 10.x.x.x)
+# Strict mode: Restricts SSH (22) and the configured Web UI port to private LAN subnets
 sudo bash install/configure_firewall.sh strict
 
 # Standard mode: Allows Web UI on LAN with rate-limited SSH

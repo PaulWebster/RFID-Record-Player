@@ -7,12 +7,14 @@ RFID map format (rfid.json):
   Legacy:  "rfid_id": "spotify:..."
   New:     "rfid_id": {"type": "spotify", "uri": "..."}
            "rfid_id": {"type": "local",   "path": "/abs/path/to/file.mp3"}
+           "rfid_id": {"type": "unmapped"}
 """
 from __future__ import annotations
 
 import json
 import os
 import threading
+from collections import deque
 try:
     from werkzeug.utils import secure_filename
 except ImportError:
@@ -30,6 +32,7 @@ from file_validator import (
     is_path_within_root,
 )
 import firewall_manager
+from web_config import WEB_PORT
 
 # ---------------------------------------------------------------------------
 # Shared state injected by main()
@@ -44,6 +47,10 @@ _record_player = None
 RFID_FILE = "rfid.json"
 RFID_LABELS_FILE = "rfid_labels.json"
 ENV_FILE = ".env"
+_rfid_lock = threading.RLock()
+_activity_lock = threading.Lock()
+_activity_events = deque(maxlen=100)
+_activity_event_id = 0
 
 app = Flask(__name__, static_folder="web/static")
 
@@ -78,6 +85,13 @@ def init(bluetooth_manager, spotify_controller, local_media_player,
     _local_media_player = local_media_player
     _playback_router = playback_router
     _record_player = record_player
+
+
+def _record_activity(message: str):
+    global _activity_event_id
+    with _activity_lock:
+        _activity_event_id += 1
+        _activity_events.append({"id": _activity_event_id, "message": message})
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +135,15 @@ def api_status():
             "device": bt_device,
         },
     })
+
+
+@app.route("/api/activity")
+def api_activity():
+    after_id = request.args.get("after", default=0, type=int)
+    with _activity_lock:
+        events = [event for event in _activity_events if event["id"] > after_id]
+        latest_id = _activity_event_id
+    return jsonify({"events": events, "latest_id": latest_id})
 
 
 # ---------------------------------------------------------------------------
@@ -196,21 +219,36 @@ def bt_connect():
 # ---------------------------------------------------------------------------
 
 def _read_rfid_file() -> dict:
-    try:
-        with open(RFID_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    with _rfid_lock:
+        try:
+            with open(RFID_FILE, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
 
 
 def _write_rfid_file(data: dict):
-    with open(RFID_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-    # Sync into in-memory map on both SpotifyController and PlaybackRouter
-    if _spotify_controller:
-        _spotify_controller.rfid_map = data
-    if _playback_router:
-        _playback_router.rfid_map = data
+    with _rfid_lock:
+        with open(RFID_FILE, "w") as f:
+            json.dump(data, f, indent=4)
+        # Sync into in-memory map on both SpotifyController and PlaybackRouter
+        if _spotify_controller:
+            _spotify_controller.rfid_map = data
+        if _playback_router:
+            _playback_router.rfid_map = data
+
+
+def register_unmapped_rfid(rfid_id: str) -> bool:
+    """Persist a newly detected RFID unless it already has an entry."""
+    with _rfid_lock:
+        rfid_map = _read_rfid_file()
+        if rfid_id in rfid_map:
+            return False
+        rfid_map[rfid_id] = {"type": "unmapped"}
+        _write_rfid_file(rfid_map)
+    _record_activity(f"Unmapped tag discovered: {rfid_id}")
+    print(f"[RFID] Registered unmapped tag {rfid_id}")
+    return True
 
 
 def _read_labels_file() -> dict:
@@ -287,9 +325,10 @@ def rfid_add():
     else:
         return jsonify({"error": "type must be 'spotify' or 'local'"}), 400
 
-    rfid_map = _read_rfid_file()
-    rfid_map[rfid_id] = entry_value
-    _write_rfid_file(rfid_map)
+    with _rfid_lock:
+        rfid_map = _read_rfid_file()
+        rfid_map[rfid_id] = entry_value
+        _write_rfid_file(rfid_map)
 
     labels = _read_labels_file()
     if label:
@@ -303,11 +342,12 @@ def rfid_add():
 
 @app.route("/api/rfid/<rfid_id>", methods=["DELETE"])
 def rfid_delete(rfid_id):
-    rfid_map = _read_rfid_file()
-    if rfid_id not in rfid_map:
-        return jsonify({"error": "RFID ID not found"}), 404
-    del rfid_map[rfid_id]
-    _write_rfid_file(rfid_map)
+    with _rfid_lock:
+        rfid_map = _read_rfid_file()
+        if rfid_id not in rfid_map:
+            return jsonify({"error": "RFID ID not found"}), 404
+        del rfid_map[rfid_id]
+        _write_rfid_file(rfid_map)
     # Also clean up label
     labels = _read_labels_file()
     labels.pop(rfid_id, None)
@@ -571,7 +611,7 @@ def security_firewall():
 # Runner
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8082, debug: bool = False):
+def run_server(host: str = "0.0.0.0", port: int = WEB_PORT, debug: bool = False):
     """Start Flask in a background daemon thread."""
     thread = threading.Thread(
         target=lambda: app.run(host=host, port=port, debug=debug, use_reloader=False),
